@@ -4,10 +4,9 @@ import com.clarium.clarium_sso.util.JwtUtil;
 import io.jsonwebtoken.ExpiredJwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.ResponseCookie;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -29,7 +28,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         this.jwtUtil = jwtUtil;
     }
 
-
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain)
@@ -37,28 +35,32 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         String token = null;
 
-        // *** Try to extract from Authorization header
-//        String authHeader = request.getHeader(AUTHORIZATION_HEADER);
-//        if (authHeader != null && authHeader.startsWith(TOKEN_PREFIX)) {
-//            token = authHeader.substring(7);
-//        }
+        // Skip JWT processing for OAuth2 endpoints and public endpoints
+        String requestURI = request.getRequestURI();
+        if (requestURI.startsWith("/oauth2/") ||
+                requestURI.startsWith("/login/") ||
+                requestURI.equals("/custom-login/auth/signin") ||
+                requestURI.equals("/custom-login/auth/signup")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
 
-        //try to extract from cookie
+        // Extract JWT token from cookie
         if (request.getCookies() != null) {
-            for (var cookie : request.getCookies()) {
-                if (cookie.getName().equals(JWT_TOKEN_TYPE)) {
+            for (Cookie cookie : request.getCookies()) {
+                if (JWT_TOKEN_TYPE.equals(cookie.getName())) {
                     token = cookie.getValue();
                     break;
                 }
             }
         }
 
-        //validate and handle expired token
-        if (token != null) {
+        // Process JWT token if present
+        if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                // Token valid
                 if (jwtUtil.isValid(token)) {
                     String email = jwtUtil.extractEmail(token);
+
                     UsernamePasswordAuthenticationToken auth =
                             new UsernamePasswordAuthenticationToken(
                                     email, null, List.of(new SimpleGrantedAuthority(ROLE_USER)));
@@ -68,17 +70,17 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 }
             } catch (ExpiredJwtException e) {
                 try {
+                    // Try to refresh the token
                     String email = e.getClaims().getSubject();
                     String newToken = jwtUtil.generateToken(email);
 
-                    ResponseCookie refreshedCookie = ResponseCookie.from(JWT_TOKEN_TYPE, newToken)
-                            .httpOnly(true)
-                            .secure(false)
-                            .path("/")
-                            .maxAge(60 * 60 * 2)
-                            .build();
-
-                    response.addHeader(HttpHeaders.SET_COOKIE, refreshedCookie.toString());
+                    // Set new token in cookie
+                    Cookie refreshedCookie = new Cookie(JWT_TOKEN_TYPE, newToken);
+                    refreshedCookie.setHttpOnly(true);
+                    refreshedCookie.setSecure(false); // Set to true in production with HTTPS
+                    refreshedCookie.setPath("/");
+                    refreshedCookie.setMaxAge(60 * 60 * 2); // 2 hours
+                    response.addCookie(refreshedCookie);
 
                     // Update auth context
                     UsernamePasswordAuthenticationToken auth =
@@ -89,12 +91,23 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     SecurityContextHolder.getContext().setAuthentication(auth);
 
                 } catch (Exception ex) {
+                    // Clear the invalid token
+                    Cookie clearCookie = new Cookie(JWT_TOKEN_TYPE, "");
+                    clearCookie.setPath("/");
+                    clearCookie.setMaxAge(0);
+                    response.addCookie(clearCookie);
                     SecurityContextHolder.clearContext();
                 }
+            } catch (Exception e) {
+                // Invalid token - clear it
+                Cookie clearCookie = new Cookie(JWT_TOKEN_TYPE, "");
+                clearCookie.setPath("/");
+                clearCookie.setMaxAge(0);
+                response.addCookie(clearCookie);
+                SecurityContextHolder.clearContext();
             }
         }
 
         filterChain.doFilter(request, response);
     }
-
 }

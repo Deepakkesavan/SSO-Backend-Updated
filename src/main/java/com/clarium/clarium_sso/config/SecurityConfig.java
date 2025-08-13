@@ -52,6 +52,7 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
         requestHandler.setCsrfRequestAttributeName(null);
+
         http
                 //CORS Configuration
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -63,6 +64,7 @@ public class SecurityConfig {
                         .ignoringRequestMatchers(
                                 "/custom-login/auth/signup",
                                 "/custom-login/auth/signin",
+                                "/custom-login/auth/logout",
                                 "/logout",
                                 "/api/auth/logout"
                         )
@@ -73,6 +75,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/custom-login/auth/signup",
                                 "/custom-login/auth/signin",
+                                "/custom-login/auth/logout",
                                 "/custom-login/auth/test",
                                 "/login/**",
                                 "/oauth2/**",
@@ -82,7 +85,7 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
 
-                // Custom exception handling to prevent OAuth2 redirects
+                // Custom exception handling
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(customAuthenticationEntryPoint())
                         .accessDeniedHandler(customAccessDeniedHandler())
@@ -94,16 +97,17 @@ public class SecurityConfig {
                         .failureUrl("http://localhost:4200/login?error=true")
                 )
 
+                // Logout configuration
                 .logout(logout -> logout
                         .logoutUrl("/logout")
                         .logoutSuccessHandler(customLogoutSuccessHandler())
-                        .deleteCookies("JSESSIONID", "XSRF-TOKEN")
+                        .deleteCookies("JSESSIONID", "XSRF-TOKEN", "jwt")
                         .invalidateHttpSession(true)
                         .clearAuthentication(true)
                         .permitAll()
                 )
 
-                // Session Management - Modified for mixed auth
+                // Session Management - Allow sessions for OAuth2 but stateless for JWT
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
                         .maximumSessions(1)
@@ -126,7 +130,9 @@ public class SecurityConfig {
             public void onLogoutSuccess(HttpServletRequest request, HttpServletResponse response,
                                         Authentication authentication) throws IOException {
 
-                // Clear any additional cookies or tokens here if needed
+                // Clear JWT cookie explicitly
+                response.addHeader("Set-Cookie", "jwt=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax");
+
                 response.setContentType("application/json");
                 response.setCharacterEncoding("UTF-8");
                 response.setStatus(HttpServletResponse.SC_OK);
@@ -147,6 +153,8 @@ public class SecurityConfig {
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
+        // Add this to handle preflight requests
+        configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
@@ -155,7 +163,8 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationProvider authenticationProvider() {
-        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider(userDetailsService);
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(userDetailsService);
         authProvider.setPasswordEncoder(passwordEncoder);
         return authProvider;
     }

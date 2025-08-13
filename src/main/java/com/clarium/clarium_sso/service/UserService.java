@@ -12,9 +12,8 @@ import com.clarium.clarium_sso.repository.EmployeeRepository;
 import com.clarium.clarium_sso.repository.UserRepository;
 import com.clarium.clarium_sso.repository.WorkInfoRepository;
 import com.clarium.clarium_sso.util.JwtUtil;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.ResponseCookie;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -67,8 +66,6 @@ public class UserService {
         else{
             throw new NotAnEmployeeException(EMAIL_NOT_REGISTERED_AS_EMPLOYEE);
         }
-
-
     }
 
     public Integer getEmpIdByEmail(String email) {
@@ -86,7 +83,6 @@ public class UserService {
                 .orElseThrow(() -> new ResourceNotFoundException(NO_DESIGNATION_FOUND_WITH_ID + id));
     }
 
-
     public LoginResponse loginWithJwt(String email, String rawPassword, HttpServletResponse response) {
         try {
             // Use Spring Security's authentication manager
@@ -99,14 +95,17 @@ public class UserService {
 
             String token = jwtUtil.generateToken(user.getEmail());
 
-            ResponseCookie jwtCookie = ResponseCookie.from(JWT_TOKEN_TYPE, token)
-                    .httpOnly(true)
-                    .secure(false)
-                    .path("/")
-                    .maxAge(60 * 60 * 2)
-                    .build();
+            // Create JWT cookie with proper settings
+            Cookie jwtCookie = new Cookie(JWT_TOKEN_TYPE, token);
+            jwtCookie.setHttpOnly(true);
+            jwtCookie.setSecure(false); // Set to true in production with HTTPS
+            jwtCookie.setPath("/");
+            jwtCookie.setMaxAge(60 * 60 * 2); // 2 hours
+            jwtCookie.setAttribute("SameSite", "Lax"); // Add SameSite attribute
+            response.addCookie(jwtCookie);
 
-            response.addHeader(HttpHeaders.SET_COOKIE, jwtCookie.toString());
+            // Also set CORS headers to ensure cookie is accepted
+            response.setHeader("Access-Control-Allow-Credentials", "true");
 
             int empId = getEmpIdByEmail(user.getEmail());
             String desgnId = getDesgnIdByEmpId(empId);
@@ -122,7 +121,4 @@ public class UserService {
             throw new InvalidCredentialsException(INVALID_EMAIL_OR_PASSWORD);
         }
     }
-
-
-
 }
